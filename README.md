@@ -13,7 +13,7 @@
 ```bash
 ./build.sh               # 編譯通用版（arm64＋x86_64，macOS 12+）並安裝到本機 ~/Applications
 ./build.sh --no-install  # 只編譯到 build/MDView.app
-./deploy.sh [host ...]   # 編譯後經 SSH 部署到其他 Mac（預設 neo imac sindy2 rosida young）
+./deploy.sh [host ...]   # 編譯後經 SSH 部署到其他 Mac（不帶參數時讀 deploy-hosts.txt）
 ```
 
 `install.sh` 會：安裝 App、註冊並啟用 Quick Look 外掛、停用並移除舊的 MD Viewer／QLMarkdown、建立連結中繼 LaunchAgent、把 `.md` 預設開啟程式設為 MDView。
