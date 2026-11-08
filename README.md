@@ -8,12 +8,17 @@
 - ⌘F 頁內搜尋（支援注音選字）
 - Finder 空白鍵預覽：樣式、主題與 App 一致，連結可點
 
-## 建置與安裝
+## 下載安裝
+
+到 [Releases](https://github.com/butyroger/mdview/releases) 下載 DMG，把 MDView 拖進「應用程式」。程式未經 Apple 公證，第一次開啟要到「系統設定 → 隱私權與安全性」按「強制打開」，或執行 `xattr -dr com.apple.quarantine /Applications/MDView.app`。開啟一次後會自動設定 Quick Look 預覽與連結中繼。
+
+## 從原始碼建置
 
 ```bash
 ./build.sh               # 編譯通用版（arm64＋x86_64，macOS 12+）並安裝到本機 ~/Applications
 ./build.sh --no-install  # 只編譯到 build/MDView.app
 ./deploy.sh [host ...]   # 編譯後經 SSH 部署到其他 Mac（不帶參數時讀 deploy-hosts.txt）
+./release.sh 1.1         # 打包 DMG 並發布到 GitHub Releases
 ```
 
 `install.sh` 會：安裝 App、註冊並啟用 Quick Look 外掛、停用並移除舊的 MD Viewer／QLMarkdown、建立連結中繼 LaunchAgent、把 `.md` 預設開啟程式設為 MDView。
@@ -26,3 +31,7 @@ Quick Look 外掛在沙盒裡既不能直接開啟其他程式（缺 Apple 私�
 
 - [markdown-it](https://github.com/markdown-it/markdown-it) 13.0.2（MIT）
 - [markdown-it-task-lists](https://github.com/revin/markdown-it-task-lists) 2.1.1（ISC）
+
+## 授權
+
+MIT，見 [LICENSE](LICENSE)。

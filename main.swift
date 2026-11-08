@@ -275,11 +275,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         applyTheme()
+        ensureHelperInstalled()
         launched = true
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }.map { URL(fileURLWithPath: $0) }
         (pending + args).forEach(open)
         pending = []
         if windows.isEmpty { openDocument(nil) }
+    }
+
+    /// 拖曳安裝（DMG）也能用：首次啟動或 App 搬家後，自動建立連結中繼 LaunchAgent 並啟用 Quick Look 外掛
+    func ensureHelperInstalled() {
+        let exe = Bundle.main.executablePath!
+        let plist = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/com.butyshop.mdview.linkhelper.plist")
+        let want: [String: Any] = [
+            "Label": "com.butyshop.mdview.linkhelper",
+            "ProgramArguments": [exe, "--link-helper"],
+            "MachServices": ["com.butyshop.mdview.linkhelper": true],
+            "ProcessType": "Background",
+        ]
+        let current = (NSDictionary(contentsOf: plist) as? [String: Any])?["ProgramArguments"] as? [String]
+        guard current?.first != exe else { return }
+        try? FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        (want as NSDictionary).write(to: plist, atomically: true)
+        func run(_ path: String, _ args: [String]) {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+            try? p.run(); p.waitUntilExit()
+        }
+        let domain = "gui/\(getuid())"
+        DispatchQueue.global().async {
+            run("/bin/launchctl", ["bootout", domain + "/com.butyshop.mdview.linkhelper"])
+            run("/bin/launchctl", ["bootstrap", domain, plist.path])
+            let ext = Bundle.main.builtInPlugInsURL!.appendingPathComponent("MDViewQuickLook.appex").path
+            run("/usr/bin/pluginkit", ["-a", ext])
+            run("/usr/bin/pluginkit", ["-e", "use", "-i", "com.butyshop.mdview.quicklook"])
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
