@@ -269,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if launched { urls.forEach(open) } else { pending += urls }
+        if launched { urls.forEach(open); openPanel?.cancel(nil) } else { pending += urls }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -280,7 +280,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }.map { URL(fileURLWithPath: $0) }
         (pending + args).forEach(open)
         pending = []
-        if windows.isEmpty { openDocument(nil) }
+        // 用 `open 檔案.md` 啟動時，開檔事件常在 didFinishLaunching 之後才到；
+        // 若此時立刻跳出模態開檔視窗，會擋住事件迴圈，檔案永遠開不出來。延後再判斷。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self, self.windows.isEmpty, self.openPanel == nil else { return }
+            self.openDocument(nil)
+        }
     }
 
     /// 拖曳安裝（DMG）也能用：首次啟動或 App 搬家後，自動建立連結中繼 LaunchAgent 並啟用 Quick Look 外掛
@@ -318,11 +323,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    var openPanel: NSOpenPanel?
     @objc func openDocument(_ sender: Any?) {
+        if let p = openPanel { p.makeKeyAndOrderFront(nil); return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!, .plainText]
-        if panel.runModal() == .OK { panel.urls.forEach(open) }
+        openPanel = panel
+        NSApp.activate(ignoringOtherApps: true)
+        // 非模態：開檔視窗開著時，外部送來的檔案仍能照常開啟
+        panel.begin { [weak self] resp in
+            guard let self = self else { return }
+            self.openPanel = nil
+            if resp == .OK { panel.urls.forEach(self.open) }
+            else if self.windows.isEmpty { NSApp.terminate(nil) }
+        }
     }
 
     var current: ViewerWindow? { windows.first { $0.window == NSApp.keyWindow } }
