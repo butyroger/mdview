@@ -77,6 +77,8 @@ function normalizeLists(root) {
   });
   // markdown-it 用 style 標對齊，turndown-gfm 只看 align 屬性
   root.querySelectorAll('th[style],td[style]').forEach(c => { if (c.style.textAlign) c.setAttribute('align', c.style.textAlign); });
+  // 表格儲存格不能換行：結尾的佔位 <br> 刪掉，其他 <br> 換成空白
+  root.querySelectorAll('td br, th br').forEach(b => { if (b.nextSibling) b.replaceWith(' '); else b.remove(); });
   root.querySelectorAll('mark.hit').forEach(m => m.replaceWith(m.textContent));
 }
 function toMd(n) {
@@ -172,14 +174,16 @@ function closestSel(sel) {
   return r && $('doc').contains(r) ? r : null;
 }
 const esc = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-function unwrap(el) { const p = el.parentNode; while (el.firstChild) p.insertBefore(el.firstChild, el); el.remove(); }
+// 所有修改都要走 execCommand，才會進 WebKit 的復原堆疊（直接改 DOM 的話 ⌘Z 會跳過或錯亂）
+function setSel(r) { const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+function selectNode(n) { const r = document.createRange(); r.selectNode(n); setSel(r); }
+function caretAt(n, off) { const r = document.createRange(); r.setStart(n, off); r.collapse(true); setSel(r); }
+function replaceNode(n, html) { selectNode(n); exec('insertHTML', html); }
+const CB = c => '<input type="checkbox" class="task-list-item-checkbox"' + (c ? ' checked=""' : '') + '>';
 function addCheckbox(li, checked) {
   if (!li || li.querySelector(':scope > input[type=checkbox]')) return;
-  const cb = document.createElement('input');
-  cb.type = 'checkbox'; cb.className = 'task-list-item-checkbox'; cb.setAttribute('contenteditable', 'false');
-  if (checked) { cb.checked = true; cb.setAttribute('checked', ''); }
-  li.classList.add('task-list-item'); li.insertBefore(document.createTextNode(' '), li.firstChild); li.insertBefore(cb, li.firstChild);
-  setDirty(true);
+  caretAt(li.firstElementChild && li.firstElementChild.nodeName === 'P' ? li.firstElementChild : li, 0);
+  exec('insertHTML', CB(checked) + '&nbsp;');
 }
 
 function cmd(c) {
@@ -198,7 +202,9 @@ function cmd(c) {
     case 'ul': exec('insertUnorderedList'); break;
     case 'ol': exec('insertOrderedList'); break;
     case 'task': if (!closestSel('li')) exec('insertUnorderedList'); addCheckbox(closestSel('li'), false); break;
-    case 'quote': { const q = closestSel('blockquote'); if (q) { unwrap(q); setDirty(true); } else exec('formatBlock', '<blockquote>'); break; }
+    case 'quote': { if (closestSel('blockquote')) exec('outdent'); else exec('formatBlock', '<blockquote>'); break; }
+    case 'undo': post('undo'); break;
+    case 'redo': post('redo'); break;
     case 'pre': exec('formatBlock', closestSel('pre') ? '<p>' : '<pre>'); break;
     case 'hr': exec('insertHorizontalRule'); break;
     case 'table': exec('insertHTML', '<table><thead><tr><th>欄位 1</th><th>欄位 2</th><th>欄位 3</th></tr></thead><tbody><tr><td><br></td><td><br></td><td><br></td></tr></tbody></table><p><br></p>'); break;
@@ -245,11 +251,12 @@ function applyLink(remove) {
   closeLink(true);
   const a = closestSel('a');
   if (remove || !url) { if (a) { const r = document.createRange(); r.selectNodeContents(a); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } exec('unlink'); return; }
-  if (a) { a.setAttribute('href', url); setDirty(true); }
+  if (a) { const n = a.cloneNode(true); n.setAttribute('href', url); replaceNode(a, n.outerHTML); }
   else if (getSelection().isCollapsed) exec('insertHTML', '<a href="' + esc(url) + '">' + esc(url) + '</a>');
   else exec('createLink', url);
 }
 
+const isTask = () => { const li = closestSel('li'); return !!(li && li.querySelector(':scope > input[type=checkbox], :scope > p > input[type=checkbox]')); };
 function refreshBar() {
   if (!ED.editing) return;
   const blk = selBlock(), tag = blk && blk.nodeName.toLowerCase();
@@ -259,9 +266,9 @@ function refreshBar() {
     if (/^(bold|italic|strikeThrough)$/.test(c)) try { on = document.queryCommandState(c) && !/^h\d$/.test(tag); } catch (e) {}
     else if (/^h\d$/.test(c)) on = tag === c;
     else if (c === 'code') on = !!closestSel('code') && !closestSel('pre');
-    else if (c === 'ul') on = !!closestSel('ul') && !closestSel('li.task-list-item');
+    else if (c === 'ul') on = !!closestSel('ul') && !isTask();
     else if (c === 'ol') on = !!closestSel('ol');
-    else if (c === 'task') on = !!closestSel('li.task-list-item');
+    else if (c === 'task') on = isTask();
     else if (c === 'quote') on = !!closestSel('blockquote');
     else if (c === 'pre') on = !!closestSel('pre');
     else if (c === 'link') on = !!closestSel('a');
@@ -299,13 +306,9 @@ function onKey(e) {
     const atEnd = !r.toString().replace(/\n$/, '');
     if (atEnd && /\n$/.test(pre.textContent)) {
       // 程式碼區塊最後一行空白時再按 Enter：離開區塊
-      const holder = pre.querySelector('code') || pre;
-      const last = holder.lastChild;
-      if (last && last.nodeType === 3) last.nodeValue = last.nodeValue.replace(/\n+$/, '');
-      const p = document.createElement('p'); p.appendChild(document.createElement('br'));
-      pre.after(p);
-      const nr = document.createRange(); nr.setStart(p, 0); s.removeAllRanges(); s.addRange(nr);
-      setDirty(true);
+      exec('delete');
+      caretAt(pre.parentNode, Array.prototype.indexOf.call(pre.parentNode.childNodes, pre) + 1);
+      exec('insertHTML', '<p><br></p>');
     } else exec('insertLineBreak');
     return;
   }
@@ -315,14 +318,16 @@ function onKey(e) {
       e.preventDefault();
       const cells = Array.from(cell.closest('table').querySelectorAll('th,td'));
       let i = cells.indexOf(cell) + (e.shiftKey ? -1 : 1);
+      let table = cell.closest('table');
       if (i >= cells.length) {
-        const tr = cell.closest('tr'), nr = tr.cloneNode(true);
-        nr.querySelectorAll('th,td').forEach(c => { const d = document.createElement('td'); d.innerHTML = '<br>'; c.replaceWith(d); });
-        (tr.closest('table').tBodies[0] || tr.parentNode).appendChild(nr);
+        // WebKit 的編輯指令刪不掉表格結構，新增列只能直接改 DOM（這一步不進復原堆疊）
+        const tr = table.rows[table.rows.length - 1], nr = document.createElement('tr');
+        for (let c = 0; c < tr.cells.length; c++) nr.appendChild(document.createElement('td')).innerHTML = '<br>';
+        (table.tBodies[0] || tr.parentNode).appendChild(nr);
         setDirty(true);
         i = cells.length;
       }
-      const target = cell.closest('table').querySelectorAll('th,td')[Math.max(0, i)];
+      const target = table.querySelectorAll('th,td')[Math.max(0, i)];
       const r = document.createRange(); r.selectNodeContents(target); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
       return;
     }
@@ -347,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!ED.editing || !(cb.matches && cb.matches('input.task-list-item-checkbox'))) return;
     e.preventDefault();
     const v = !cb.hasAttribute('checked');
-    setTimeout(() => { cb.checked = v; v ? cb.setAttribute('checked', '') : cb.removeAttribute('checked'); setDirty(true); }, 0);
+    setTimeout(() => replaceNode(cb, CB(v)), 0);
   });
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('selectionchange', refreshBar);

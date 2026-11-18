@@ -94,6 +94,8 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
         case "closeSidebar": setSidebar(false); UserDefaults.standard.set(false, forKey: "sidebar")
         case "dirty": isDirty = true
         case "clean": isDirty = false
+        case "undo": window?.undoManager?.undo()
+        case "redo": window?.undoManager?.redo()
         default: break
         }
     }
