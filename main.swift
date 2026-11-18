@@ -1,4 +1,4 @@
-// MDView：輕量 Markdown 閱讀器。外部連結交給系統預設瀏覽器（Chrome），.md 連結在本程式內開啟，檔案變更自動重新整理。
+// MDView：輕量 Markdown 閱讀器（可切換所見即所得編輯）。外部連結交給系統預設瀏覽器（Chrome），.md 連結在本程式內開啟，檔案變更自動重新整理。
 import AppKit
 import WebKit
 import UniformTypeIdentifiers
@@ -10,6 +10,8 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
     var timer: Timer?
     var ready = false
     var onClose: ((ViewerWindow) -> Void)?
+    var editing = false
+    var isDirty = false { didSet { window?.isDocumentEdited = isDirty } }
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -47,7 +49,7 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
     }
 
     // MARK: 工具列
-    static let ids: [NSToolbarItem.Identifier] = [.init("open"), .init("sidebar"), .flexibleSpace, .init("pdf"), .init("export"), .init("theme"), .init("help")]
+    static let ids: [NSToolbarItem.Identifier] = [.init("open"), .init("sidebar"), .init("edit"), .flexibleSpace, .init("pdf"), .init("export"), .init("theme"), .init("help")]
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.ids }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.ids }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -63,6 +65,10 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
         case "open": return button("開啟", "doc", #selector(AppDelegate.openDocument(_:)), d)
         case "sidebar": return button("目錄", "sidebar.left", #selector(toggleSidebar(_:)), self)
         case "help": return button("說明", "info.circle", #selector(showHelp(_:)), self)
+        case "edit":
+            let i = button(editing ? "完成" : "編輯", editing ? "checkmark.circle" : "pencil", #selector(toggleEdit(_:)), self)
+            i.toolTip = "切換編輯模式（⌘E）"
+            return i
         case "pdf": return button("PDF", "doc.richtext", #selector(exportPDF(_:)), self)
         case "theme":
             let i = button("主題", d.theme.symbol, #selector(AppDelegate.cycleTheme(_:)), d)
@@ -84,12 +90,76 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
     }
 
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.body as? String == "closeSidebar" { setSidebar(false); UserDefaults.standard.set(false, forKey: "sidebar") }
+        switch message.body as? String {
+        case "closeSidebar": setSidebar(false); UserDefaults.standard.set(false, forKey: "sidebar")
+        case "dirty": isDirty = true
+        case "clean": isDirty = false
+        default: break
+        }
     }
     @objc func showHelp(_ sender: Any?) { web.evaluateJavaScript("toggleHelp()") }
     @objc func showFind(_ sender: Any?) { web.evaluateJavaScript("showFind()") }
     @objc func findNext(_ sender: Any?) { web.evaluateJavaScript("step(1)") }
     @objc func findPrev(_ sender: Any?) { web.evaluateJavaScript("step(-1)") }
+
+    // MARK: 編輯
+    @objc func toggleEdit(_ sender: Any?) { setEditing(!editing) }
+    func setEditing(_ on: Bool) {
+        // 按「完成」離開編輯模式時自動存檔
+        if !on && isDirty { save { ok in if ok { self.setEditing(false) } }; return }
+        editing = on
+        web.evaluateJavaScript("setEditing(\(on))")
+        if on { window?.makeFirstResponder(web) }
+        for i in window?.toolbar?.items ?? [] where i.itemIdentifier.rawValue == "edit" {
+            i.label = on ? "完成" : "編輯"
+            i.image = NSImage(systemSymbolName: on ? "checkmark.circle" : "pencil", accessibilityDescription: i.label)
+        }
+    }
+
+    /// 把編輯結果轉回 Markdown 寫回原檔；done(true) 表示已存（或本來就沒改）
+    func save(_ done: ((Bool) -> Void)? = nil) {
+        guard isDirty else { done?(true); return }
+        if let m = modDate(), let l = lastModified, m != l {
+            let a = NSAlert()
+            a.messageText = "「\(fileURL.lastPathComponent)」已被其他程式修改"
+            a.informativeText = "儲存會覆蓋外部的修改。"
+            a.addButton(withTitle: "覆蓋"); a.addButton(withTitle: "取消")
+            if a.runModal() != .alertFirstButtonReturn { done?(false); return }
+        }
+        web.evaluateJavaScript("saveMarkdown()") { [weak self] r, err in
+            guard let self else { return }
+            guard let text = r as? String else {
+                NSAlert(error: err ?? NSError(domain: "MDView", code: 1, userInfo: [NSLocalizedDescriptionKey: "無法取得編輯內容"])).runModal()
+                done?(false); return
+            }
+            do {
+                try text.write(to: self.fileURL.resolvingSymlinksInPath(), atomically: true, encoding: .utf8)
+                self.lastModified = self.modDate()
+                self.isDirty = false
+                done?(true)
+            } catch {
+                self.web.evaluateJavaScript("setDirty(true)")
+                NSAlert(error: error).runModal()
+                done?(false)
+            }
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard isDirty else { return true }
+        let a = NSAlert()
+        a.messageText = "要儲存「\(fileURL.lastPathComponent)」的修改嗎？"
+        a.informativeText = "如果不儲存，修改將會遺失。"
+        a.addButton(withTitle: "儲存"); a.addButton(withTitle: "取消"); a.addButton(withTitle: "不儲存")
+        a.beginSheetModal(for: sender) { r in
+            switch r {
+            case .alertFirstButtonReturn: self.save { ok in if ok { sender.close() } }
+            case .alertThirdButtonReturn: self.isDirty = false; sender.close()
+            default: break
+            }
+        }
+        return false
+    }
 
     // MARK: 目錄側欄
     var sidebarOn = false
@@ -171,7 +241,7 @@ final class ViewerWindow: NSWindowController, WKNavigationDelegate, NSWindowDele
     }
 
     func reloadIfChanged() {
-        guard ready, let m = modDate(), m != lastModified else { return }
+        guard ready, !isDirty, let m = modDate(), m != lastModified else { return }
         render(keepScroll: true)
     }
 
@@ -228,7 +298,7 @@ enum Theme: String, CaseIterable {
     var appearance: NSAppearance? { self == .auto ? nil : NSAppearance(named: self == .light ? .aqua : .darkAqua) }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let shared = AppDelegate()
     var theme = Theme(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? .auto {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: "theme"); applyTheme() }
@@ -323,6 +393,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let dirty = windows.filter { $0.isDirty }
+        guard !dirty.isEmpty else { return .terminateNow }
+        let a = NSAlert()
+        a.messageText = dirty.count == 1 ? "「\(dirty[0].fileURL.lastPathComponent)」有尚未儲存的修改" : "有 \(dirty.count) 個檔案尚未儲存"
+        a.informativeText = "結束前要儲存嗎？"
+        a.addButton(withTitle: "全部儲存"); a.addButton(withTitle: "取消"); a.addButton(withTitle: "不儲存")
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            var left = dirty.count, allOK = true
+            for w in dirty { w.save { ok in allOK = allOK && ok; left -= 1; if left == 0 { NSApp.reply(toApplicationShouldTerminate: allOK) } } }
+            return .terminateLater
+        case .alertThirdButtonReturn: return .terminateNow
+        default: return .terminateCancel
+        }
+    }
+
     var openPanel: NSOpenPanel?
     @objc func openDocument(_ sender: Any?) {
         if let p = openPanel { p.makeKeyAndOrderFront(nil); return }
@@ -353,6 +440,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func exportPDFMenu(_ sender: Any?) { current?.exportPDF(sender) }
     @objc func exportHTMLMenu(_ sender: Any?) { current?.exportHTML(sender) }
     @objc func exportDOCXMenu(_ sender: Any?) { current?.exportDOCX(sender) }
+    // MARK: 最近開啟
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let urls = NSDocumentController.shared.recentDocumentURLs
+        for u in urls {
+            let i = NSMenuItem(title: u.lastPathComponent, action: #selector(openRecent(_:)), keyEquivalent: "")
+            i.target = self; i.representedObject = u; i.toolTip = u.path
+            let icon = NSWorkspace.shared.icon(forFile: u.path); icon.size = NSSize(width: 16, height: 16); i.image = icon
+            menu.addItem(i)
+        }
+        if !urls.isEmpty { menu.addItem(.separator()) }
+        let c = NSMenuItem(title: "清除選單", action: urls.isEmpty ? nil : #selector(clearRecent(_:)), keyEquivalent: "")
+        c.target = self; menu.addItem(c)
+    }
+    @objc func openRecent(_ sender: NSMenuItem) {
+        guard let u = sender.representedObject as? URL else { return }
+        if FileManager.default.fileExists(atPath: u.path) { open(u) }
+        else { NSSound.beep() }
+    }
+    @objc func clearRecent(_ sender: Any?) { NSDocumentController.shared.clearRecentDocuments(sender) }
+    @objc func toggleEditMenu(_ sender: Any?) { current?.toggleEdit(sender) }
+    @objc func saveMenu(_ sender: Any?) { current?.save() }
     @objc func revealInFinder(_ sender: Any?) { if let w = current { NSWorkspace.shared.activateFileViewerSelecting([w.fileURL]) } }
     @objc func editInTextEdit(_ sender: Any?) {
         guard let w = current else { return }
@@ -380,17 +489,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                        item("結束 MDView", #selector(NSApplication.terminate(_:)), "q")])
         let recent = NSMenuItem(title: "最近開啟", action: nil, keyEquivalent: "")
         let recentMenu = NSMenu(title: "Open Recent")
-        recentMenu.addItem(item("清除選單", #selector(NSDocumentController.clearRecentDocuments(_:)), ""))
+        recentMenu.delegate = self  // 手動建的選單 AppKit 不會自動填，開啟子選單時自己列
         recent.submenu = recentMenu
         add("檔案", [item("開啟…", #selector(openDocument(_:)), "o"), recent, .separator(),
+                    item("儲存", #selector(saveMenu(_:)), "s"), .separator(),
                     item("在 Finder 中顯示", #selector(revealInFinder(_:)), "r", [.command, .shift]),
-                    item("用文字編輯開啟", #selector(editInTextEdit(_:)), "e"), .separator(),
+                    item("用文字編輯開啟", #selector(editInTextEdit(_:)), "e", [.command, .option]), .separator(),
                     item("匯出 PDF…", #selector(exportPDFMenu(_:)), "e", [.command, .shift]),
                     item("匯出 HTML…", #selector(exportHTMLMenu(_:)), ""),
                     item("匯出 Word（DOCX）…", #selector(exportDOCXMenu(_:)), ""),
                     item("列印…", #selector(printDoc(_:)), "p"),
                     item("關閉視窗", #selector(NSWindow.performClose(_:)), "w")])
-        add("編輯", [item("復原", Selector(("undo:")), "z"), item("重做", Selector(("redo:")), "z", [.command, .shift]), .separator(),
+        add("編輯", [item("編輯模式", #selector(toggleEditMenu(_:)), "e"), .separator(),
+                    item("復原", Selector(("undo:")), "z"), item("重做", Selector(("redo:")), "z", [.command, .shift]), .separator(),
                     item("剪下", #selector(NSText.cut(_:)), "x"), item("拷貝", #selector(NSText.copy(_:)), "c"),
                     item("貼上", #selector(NSText.paste(_:)), "v"), item("全選", #selector(NSText.selectAll(_:)), "a"), .separator(),
                     item("尋找…", #selector(findMenu(_:)), "f"), item("找下一個", #selector(findNextMenu(_:)), "g"),

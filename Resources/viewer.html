@@ -44,15 +44,35 @@ body.side #toc{display:block}body.side{padding-left:320px;max-width:none}
 #help .row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line)}
 #help kbd{font:12px ui-monospace,Menlo,monospace;background:var(--code);border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:3px}
 mark.hit{background:#fff3a3;color:#1f2328;border-radius:2px}mark.hit.on{background:#ff9632}
-@media print{#toc,#find,#help{display:none!important}mark.hit{background:none!important}body{padding:0!important;max-width:none}}
+#bar{display:none;position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);margin:-32px -8px 16px;padding:8px 8px;flex-wrap:wrap;gap:2px;align-items:center}
+body.editing #bar{display:flex}
+#bar button{border:1px solid transparent;background:none;color:var(--fg);cursor:pointer;font:13px -apple-system,"PingFang TC",sans-serif;min-width:26px;height:28px;padding:0 5px;border-radius:6px}
+#bar button:hover{background:var(--code)}#bar button.on{background:var(--code);border-color:var(--line);color:var(--link)}
+#bar .sep{width:1px;height:18px;background:var(--line);margin:0 5px}
+#bar .st{margin-left:auto;color:var(--muted);font-size:12px;padding-right:4px}
+body.editing #doc{outline:none;min-height:70vh;caret-color:var(--link)}
+body:not(.editing) .task-list-item-checkbox{pointer-events:none}
+.task-list-item-checkbox{cursor:pointer}
+#linkbox{position:fixed;top:56px;left:50%;transform:translateX(-50%);display:none;gap:6px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,.2);z-index:15;font-size:13px}
+#linkbox input{border:1px solid var(--line);border-radius:5px;padding:5px 8px;width:340px;background:var(--bg);color:var(--fg);font-size:14px;outline:none}
+#linkbox button{border:1px solid var(--line);background:var(--code);color:var(--fg);cursor:pointer;font-size:13px;padding:4px 10px;border-radius:5px}
+@media print{#toc,#find,#help,#bar,#linkbox{display:none!important}mark.hit{background:none!important}body{padding:0!important;max-width:none}}
 </style>
 <script src="markdown-it.min.js"></script>
 <script src="markdown-it-task-lists.min.js"></script>
+<script src="turndown.js"></script>
+<script src="turndown-plugin-gfm.js"></script>
 </head>
 <body>
 <nav id="toc"><div class="hd"><span>目錄</span><button title="關閉目錄" onclick="window.webkit.messageHandlers.mdview.postMessage('closeSidebar')">×</button></div><div class="list"></div></nav>
 <div id="find"><input id="q" placeholder="尋找…"><span class="n" id="cnt"></span><button title="上一個 ⇧↩" onclick="step(-1)">‹</button><button title="下一個 ↩" onclick="step(1)">›</button><button title="關閉 Esc" onclick="hideFind()">×</button></div>
-<div id="help" onclick="if(event.target===this)toggleHelp(false)"><div class="box"><div class="top"><span>快捷鍵說明</span><button onclick="toggleHelp(false)">×</button></div><h4>檔案</h4><div class="row"><span>開啟檔案</span><span><kbd>⌘</kbd><kbd>O</kbd></span></div><div class="row"><span>匯出 PDF</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd></span></div><div class="row"><span>列印</span><span><kbd>⌘</kbd><kbd>P</kbd></span></div><div class="row"><span>用文字編輯開啟</span><span><kbd>⌘</kbd><kbd>E</kbd></span></div><div class="row"><span>在 Finder 中顯示</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>R</kbd></span></div><div class="row"><span>關閉視窗</span><span><kbd>⌘</kbd><kbd>W</kbd></span></div><h4>顯示</h4><div class="row"><span>重新載入</span><span><kbd>⌘</kbd><kbd>R</kbd></span></div><div class="row"><span>顯示／隱藏目錄</span><span><kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd></span></div><div class="row"><span>切換主題（系統→淺→深）</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd></span></div><div class="row"><span>放大／縮小／實際大小</span><span><kbd>⌘</kbd><kbd>+</kbd> ／ <kbd>⌘</kbd><kbd>-</kbd> ／ <kbd>⌘</kbd><kbd>0</kbd></span></div><div class="row"><span>快捷鍵說明</span><span><kbd>⌘</kbd><kbd>/</kbd></span></div><h4>尋找</h4><div class="row"><span>尋找</span><span><kbd>⌘</kbd><kbd>F</kbd></span></div><div class="row"><span>下一個</span><span><kbd>↩</kbd> 或 <kbd>⌘</kbd><kbd>G</kbd></span></div><div class="row"><span>上一個</span><span><kbd>⇧</kbd><kbd>↩</kbd> 或 <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd></span></div><div class="row"><span>關閉搜尋列</span><span><kbd>Esc</kbd></span></div><h4>連結</h4><div class="row"><span>網址連結</span><span>交給 Chrome 開啟</span></div><div class="row"><span>相對路徑 .md</span><span>在 MDView 開新視窗</span></div><div class="row"><span>其他本機檔案</span><span>用預設程式開啟</span></div></div></div>
+<div id="help" onclick="if(event.target===this)toggleHelp(false)"><div class="box"><div class="top"><span>快捷鍵說明</span><button onclick="toggleHelp(false)">×</button></div><h4>檔案</h4><div class="row"><span>開啟檔案</span><span><kbd>⌘</kbd><kbd>O</kbd></span></div><div class="row"><span>匯出 PDF</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd></span></div><div class="row"><span>列印</span><span><kbd>⌘</kbd><kbd>P</kbd></span></div><div class="row"><span>在 Finder 中顯示</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>R</kbd></span></div><div class="row"><span>關閉視窗</span><span><kbd>⌘</kbd><kbd>W</kbd></span></div><h4>顯示</h4><div class="row"><span>重新載入</span><span><kbd>⌘</kbd><kbd>R</kbd></span></div><div class="row"><span>顯示／隱藏目錄</span><span><kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd></span></div><div class="row"><span>切換主題（系統→淺→深）</span><span><kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd></span></div><div class="row"><span>放大／縮小／實際大小</span><span><kbd>⌘</kbd><kbd>+</kbd> ／ <kbd>⌘</kbd><kbd>-</kbd> ／ <kbd>⌘</kbd><kbd>0</kbd></span></div><div class="row"><span>快捷鍵說明</span><span><kbd>⌘</kbd><kbd>/</kbd></span></div><h4>編輯</h4><div class="row"><span>切換編輯模式</span><span><kbd>⌘</kbd><kbd>E</kbd></span></div><div class="row"><span>儲存</span><span><kbd>⌘</kbd><kbd>S</kbd></span></div><div class="row"><span>粗體／斜體／刪除線</span><span><kbd>⌘</kbd><kbd>B</kbd> ／ <kbd>⌘</kbd><kbd>I</kbd> ／ <kbd>⇧</kbd><kbd>⌘</kbd><kbd>X</kbd></span></div><div class="row"><span>行內程式碼／連結</span><span><kbd>⌘</kbd><kbd>`</kbd> ／ <kbd>⌘</kbd><kbd>K</kbd></span></div><div class="row"><span>清單縮排／取消縮排</span><span><kbd>Tab</kbd> ／ <kbd>⇧</kbd><kbd>Tab</kbd></span></div><div class="row"><span>行首快捷</span><span># ## ### - 1. &gt; [ ] 加空白</span></div><div class="row"><span>用文字編輯開啟</span><span><kbd>⌥</kbd><kbd>⌘</kbd><kbd>E</kbd></span></div><h4>尋找</h4><div class="row"><span>尋找</span><span><kbd>⌘</kbd><kbd>F</kbd></span></div><div class="row"><span>下一個</span><span><kbd>↩</kbd> 或 <kbd>⌘</kbd><kbd>G</kbd></span></div><div class="row"><span>上一個</span><span><kbd>⇧</kbd><kbd>↩</kbd> 或 <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd></span></div><div class="row"><span>關閉搜尋列</span><span><kbd>Esc</kbd></span></div><h4>連結</h4><div class="row"><span>網址連結</span><span>交給 Chrome 開啟</span></div><div class="row"><span>相對路徑 .md</span><span>在 MDView 開新視窗</span></div><div class="row"><span>其他本機檔案</span><span>用預設程式開啟</span></div></div></div>
+<div id="linkbox"><input id="lk" placeholder="輸入網址，例如 https://…"><button id="lk-ok">確定</button><button id="lk-rm">移除連結</button></div>
+<div id="bar" onmousedown="if(event.target.closest('button'))event.preventDefault()">
+<button data-c="p" title="內文">內文</button><button data-c="h1" title="標題 1（行首輸入 # 加空白）">H1</button><button data-c="h2" title="標題 2（## 加空白）">H2</button><button data-c="h3" title="標題 3（### 加空白）">H3</button><span class="sep"></span>
+<button data-c="bold" title="粗體 ⌘B"><b>B</b></button><button data-c="italic" title="斜體 ⌘I"><i>I</i></button><button data-c="strikeThrough" title="刪除線 ⇧⌘X"><s>S</s></button><button data-c="code" title="行內程式碼 ⌘`"><code>&lt;/&gt;</code></button><button data-c="link" title="連結 ⌘K">🔗</button><span class="sep"></span>
+<button data-c="ul" title="項目清單（- 加空白）">• 清單</button><button data-c="ol" title="編號清單（1. 加空白）">1. 清單</button><button data-c="task" title="待辦（[ ] 加空白）">☑ 待辦</button><button data-c="quote" title="引言（&gt; 加空白）">❝ 引言</button><button data-c="pre" title="程式碼區塊">{ } 程式碼</button><button data-c="table" title="插入表格">⊞ 表格</button><button data-c="hr" title="分隔線">―</button>
+<span class="st" id="st"></span></div>
 <main id="doc"></main>
 <script>
 const md = window.markdownit({html: true, linkify: true, typographer: false}).use(window.markdownitTaskLists);
@@ -60,10 +80,13 @@ function render(text, keepScroll, baseHref) {
   let b = document.querySelector('base');
   if (!b) { b = document.createElement('base'); document.head.prepend(b); }
   b.href = baseHref;
-  const y = keepScroll ? window.scrollY : 0;
-  try { document.getElementById('doc').innerHTML = md.render(text); }
-  catch (e) { document.getElementById('doc').innerHTML = '<pre id="err"></pre>'; document.getElementById('err').textContent = String(e); }
+  const y = keepScroll ? window.scrollY : 0, doc = document.getElementById('doc');
+  try { doc.innerHTML = renderBlocks(text); }
+  catch (e) { doc.innerHTML = '<pre id="err"></pre>'; document.getElementById('err').textContent = String(e); ED.blocks = new Map(); }
+  doc.querySelectorAll('input.task-list-item-checkbox').forEach(i => { i.removeAttribute('disabled'); i.setAttribute('contenteditable', 'false'); });
   buildToc();
+  snapshot();
+  setDirty(false);
   if (document.getElementById('find').style.display === 'flex') search(document.getElementById('q').value);
   const h = document.querySelector('h1');
   if (h) document.title = h.textContent;
@@ -122,11 +145,14 @@ function toggleHelp(on) { const h = document.getElementById('help'); h.style.dis
 function toggleSidebar(on) { document.body.classList.toggle('side', on); }
 function exportHTML() {
   const c = document.documentElement.cloneNode(true);
-  c.querySelectorAll('script,#toc,#find,#help').forEach(n => n.remove());
+  c.querySelectorAll('script,#toc,#find,#help,#bar,#linkbox').forEach(n => n.remove());
+  c.querySelectorAll('[contenteditable]').forEach(n => n.removeAttribute('contenteditable'));
+  c.querySelector('body').classList.remove('editing');
   c.querySelectorAll('mark.hit').forEach(m => m.replaceWith(m.textContent));
   c.querySelector('body').classList.remove('side');
   return '<!doctype html>\n' + c.outerHTML;
 }
 </script>
+<script src="editor.js"></script>
 </body>
 </html>
