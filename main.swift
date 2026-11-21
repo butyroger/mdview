@@ -348,6 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildMenu()
         applyTheme()
         ensureHelperInstalled()
+        if UserDefaults.standard.object(forKey: "autoCheckUpdate") == nil { UserDefaults.standard.set(true, forKey: "autoCheckUpdate") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.checkForUpdate(forced: false) }
         launched = true
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }.map { URL(fileURLWithPath: $0) }
         (pending + args).forEach(open)
@@ -477,6 +479,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         op.runModal(for: w.window!, delegate: nil, didRun: nil, contextInfo: nil)
     }
 
+    // MARK: 檢查更新：讀 GitHub 最新 Release 的版本號，比本機新就提示前往下載。自動檢查每天最多一次
+    var checkingUpdate = false
+    @objc func checkForUpdateMenu(_ sender: Any?) { checkForUpdate(forced: true) }
+    @objc func toggleAutoCheckUpdate(_ sender: NSMenuItem) {
+        let on = !UserDefaults.standard.bool(forKey: "autoCheckUpdate")
+        UserDefaults.standard.set(on, forKey: "autoCheckUpdate")
+        sender.state = on ? .on : .off
+    }
+    func checkForUpdate(forced: Bool) {
+        let d = UserDefaults.standard
+        if checkingUpdate { return }
+        if !forced {
+            guard d.bool(forKey: "autoCheckUpdate") else { return }
+            if let next = d.object(forKey: "nextUpdateCheck") as? Date, next > Date() { return }
+        }
+        d.set(Date(timeIntervalSinceNow: 86400), forKey: "nextUpdateCheck")
+        checkingUpdate = true
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/butyroger/mdview/releases/latest")!,
+                             cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            DispatchQueue.main.async {
+                self.checkingUpdate = false
+                let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+                guard let json = json, let tag = json["tag_name"] as? String else {
+                    if forced {
+                        let msg = err?.localizedDescription ?? "伺服器回應：HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)"
+                        self.updateAlert("無法檢查更新", "可能沒有網路連線或伺服器沒有回應。\n\n\(msg)", ["好"])
+                    }
+                    return
+                }
+                let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+                let page = URL(string: json["html_url"] as? String ?? "") ?? URL(string: "https://github.com/butyroger/mdview/releases/latest")!
+                guard current.compare(latest, options: .numeric) == .orderedAscending else {
+                    if forced { self.updateAlert("已是最新版本", "目前使用的 MDView \(current) 就是最新版本。", ["好"]) }
+                    return
+                }
+                if !forced && d.string(forKey: "skippedVersion") == latest { return }
+                var dmg: URL?
+                for a in json["assets"] as? [[String: Any]] ?? [] {
+                    if let n = a["name"] as? String, n.hasSuffix(".dmg"), let u = a["browser_download_url"] as? String { dmg = URL(string: u) }
+                }
+                switch self.updateAlert("有新版 MDView \(latest)", "目前使用的是 \(current)，要前往下載新版嗎？\n\n下載後打開 DMG，把 MDView 拖到「應用程式」覆蓋舊版即可。",
+                                        ["下載新版", "查看說明", "略過這個版本", "稍後再說"]) {
+                case .alertFirstButtonReturn: NSWorkspace.shared.open(dmg ?? page)
+                case .alertSecondButtonReturn: NSWorkspace.shared.open(page)
+                case .alertThirdButtonReturn: d.set(latest, forKey: "skippedVersion")
+                default: break
+                }
+            }
+        }.resume()
+    }
+    @discardableResult
+    func updateAlert(_ title: String, _ text: String, _ buttons: [String]) -> NSApplication.ModalResponse {
+        let a = NSAlert(); a.messageText = title; a.informativeText = text
+        buttons.forEach { a.addButton(withTitle: $0) }
+        NSApp.activate(ignoringOtherApps: true)
+        return a.runModal()
+    }
+
     func buildMenu() {
         let main = NSMenu()
         func add(_ title: String, _ items: [NSMenuItem]) {
@@ -486,7 +549,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func item(_ t: String, _ a: Selector?, _ k: String, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
             let i = NSMenuItem(title: t, action: a, keyEquivalent: k); i.keyEquivalentModifierMask = mods; return i
         }
-        add("MDView", [item("關於 MDView", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""), .separator(),
+        let autoUpdate = item("自動檢查更新", #selector(toggleAutoCheckUpdate(_:)), "")
+        autoUpdate.state = UserDefaults.standard.object(forKey: "autoCheckUpdate") as? Bool ?? true ? .on : .off
+        add("MDView", [item("關於 MDView", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+                       item("檢查更新…", #selector(checkForUpdateMenu(_:)), ""), autoUpdate, .separator(),
                        item("隱藏 MDView", #selector(NSApplication.hide(_:)), "h"),
                        item("結束 MDView", #selector(NSApplication.terminate(_:)), "q")])
         let recent = NSMenuItem(title: "最近開啟", action: nil, keyEquivalent: "")
